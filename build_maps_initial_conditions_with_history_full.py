@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
-import csv
-import re
-from datetime import datetime
-from pathlib import Path
-from typing import List, Optional, Dict, Tuple
+import argparse  # Parse command-line arguments.
+import csv  # Read and write CSV files.
+import re  # Handle filename and variable-name pattern matching.
+from datetime import datetime  # Parse and compare dates.
+from pathlib import Path  # Work with filesystem paths.
+from typing import List, Optional, Dict, Tuple  # Type hints for collections and optional values.
 
-import numpy as np
-from netCDF4 import Dataset
+import numpy as np  # Numerical arrays and vectorized calculations.
+from netCDF4 import Dataset  # Read and write NetCDF files.
 
 
 STATE_ABBR_TO_FIPS = {
