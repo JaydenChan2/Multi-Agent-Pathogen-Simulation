@@ -86,16 +86,22 @@ MIN_DB_NMATCH = 30
 
 def load_variant_family_tree(filename):
     """
-    Read:
+    Load the phylogenetic classification of pathogen variants from a CSV file.
 
-    variant,family,branch,clade
+    Each row maps a variant name to its position in the phylogeny hierarchy
+    (family > branch > clade). This tree is later used by
+    build_cross_immunity_matrix to assign cross-immunity levels based on how
+    closely related two variants are.
+
+    Expected CSV columns: variant, family, branch, clade
+
+    Args:
+        filename (str): Path to the variant family tree CSV file.
 
     Returns:
-        tree[variant] = {
-            "family": family,
-            "branch": branch,
-            "clade": clade
-        }
+        dict: Mapping of variant name (str) to a dict with keys
+              "family", "branch", and "clade" (all str). Returns an empty
+              dict if the file does not exist.
     """
     tree = {}
 
@@ -120,7 +126,32 @@ def load_variant_family_tree(filename):
     return tree
 
 def build_cross_immunity_matrix(active_variants, family_tree):
+    """
+    Build an NxN cross-immunity matrix for all active variants.
 
+    Cross-immunity represents how much prior infection with variant i protects
+    against variant j. Values are assigned by phylogenetic proximity:
+
+        - Same variant (i == j):         0.90  (near-complete self-immunity)
+        - Same family, different variant: 0.75  (closely related)
+        - Same branch:                    0.55  (moderately related)
+        - Same clade:                     0.35  (distantly related)
+        - No shared classification:       0.20  (baseline cross-immunity)
+
+    Variants not found in family_tree are treated as unrelated (0.20 off-
+    diagonal). Phylogeny lookup uses find_phylogeny, which walks up the
+    variant name hierarchy to find the closest registered ancestor.
+
+    Args:
+        active_variants (list[str]): Ordered list of variant labels for the
+                                     current forecast.
+        family_tree (dict): Output of load_variant_family_tree — maps variant
+                            names to their phylogenetic classification.
+
+    Returns:
+        list[list[float]]: NxN nested list where matrix[i][j] is the
+                           cross-immunity factor from variant i to variant j.
+    """
     nv = len(active_variants)
     
 
@@ -155,7 +186,24 @@ def build_cross_immunity_matrix(active_variants, family_tree):
     return matrix
 
 def find_phylogeny(variant, family_tree):
+    """
+    Look up a variant's phylogenetic classification with hierarchical fallback.
 
+    Variant names follow a dot-delimited hierarchy (e.g. "XBB.1.5.1"). If the
+    exact name is not in family_tree, this function strips the trailing
+    sub-lineage suffix and retries — repeating until a match is found or the
+    name can no longer be shortened. This lets newer sub-variants inherit the
+    classification of their registered ancestor.
+
+    Args:
+        variant (str): Variant label to look up (e.g. "XBB.1.5.1").
+        family_tree (dict): Phylogeny dict produced by load_variant_family_tree.
+
+    Returns:
+        dict | None: Classification dict with keys "family", "branch", "clade"
+                     if any ancestor is found; None if no match exists at any
+                     level of the hierarchy.
+    """
     test = variant
 
     while True:

@@ -450,6 +450,7 @@ def build_compartment_grids(
     state_id_grid,
     state_dir: Path,
 ):
+    
     """Build the initial S, I, A, R, Ch, and Cn grids from state and variant inputs."""
     # Start with empty compartment grids for every grid cell and active variant.
     ny, nx = pop_grid.shape
