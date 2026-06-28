@@ -269,3 +269,6 @@ For GTFS transit: bulk feed download from https://transit.land/ or individual ag
 | Combined modifier | `env_beta_modifier` mean ≈ 1.0 (no artificial inflation/deflation of national R) |
 | Integration | `write_init_nc` output contains new variables and passes existing compartment closure checks |
 | Namelist | `edit_namelist.py` writes new keys without breaking existing Fortran model reads |
+
+## Notes:
+We should incorporate how these factors would be ranked in the priority/tiering system, as of now he has a few factors with effect that do not have equal worth on the calculation for the beta; it's a weighted average based on ranking in a priority tier list that how heavily the beta is changed. 
