@@ -272,3 +272,4 @@ For GTFS transit: bulk feed download from https://transit.land/ or individual ag
 
 ## Notes:
 We should incorporate how these factors would be ranked in the priority/tiering system, as of now he has a few factors with effect that do not have equal worth on the calculation for the beta; it's a weighted average based on ranking in a priority tier list that how heavily the beta is changed. 
+Also DEFINITELY need his help because ForTran is doing the hard math with all the numbers made by the python backend. So he would have to do some fortran nonsense to make sure that our numbers aren't just going into nothing.
