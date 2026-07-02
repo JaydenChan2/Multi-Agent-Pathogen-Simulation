@@ -1,14 +1,4 @@
 # Implementation Plan: Meteorological & Infrastructure Quality Factors
-
-## Overview
-
-This document outlines the plan to incorporate two new environmental factors into the MAPS (Multi-Agent Pathogen Simulation) model:
-
-1. **Meteorological Factor** — weather conditions (temperature, humidity, UV) that affect viral survival and transmission rates
-2. **Infrastructure Quality Factor** — expanded infrastructure coverage (schools, libraries, public transit, retail, etc.) that affects per-cell contact rates
-
-Both factors translate into spatially-resolved grid multipliers that modulate the base transmission rate (`beta`) before it reaches the Fortran simulation core.
-
 ---
 
 ## 1. Meteorological Factor
@@ -39,49 +29,36 @@ beta_effective = beta0 * meteo_factor
 
 All three sub-functions normalize to 1.0 at neutral conditions so the multiplier is interpretable. Weights (`w_*`) are new namelist parameters.
 
-### Recommended APIs
+###APIs
 
-| API | What It Provides | Cost | Notes |
-|---|---|---|---|
-| **Open-Meteo** (primary) | Temperature, relative humidity, precipitation, UV index — hourly, 1 km resolution, global | Free, no key | Best choice: no registration, generous rate limits, historical reanalysis back to 1940 |
+|**Open-Meteo** | Temperature, relative humidity, precipitation, UV index — hourly, 1 km resolution, global | Free, no key | Best choice: no registration, generous rate limits, historical reanalysis back to 1940 |
+
 | **NASA POWER API** | Daily climate averages at 0.5° resolution, including surface solar radiation | Free, no key | Good for UV proxy (surface downwelling SW) |
+
 | **NOAA Climate Data Online** | US station observations, gridded PRISM-style products | Free, requires API key | Useful for precipitation and temperature validation |
-| **ERA5 via CDS API** | Gold-standard reanalysis, global 0.25° resolution, all variables | Free but requires ECMWF account | Best for historical runs; slower to access |
 
-**Recommendation:** Use Open-Meteo for real-time and near-forecast use cases; add ERA5 as a fallback for historical simulations.
-
-Open-Meteo endpoint example:
-```
-https://api.open-meteo.com/v1/forecast?
-  latitude={lat}&longitude={lon}
-  &daily=temperature_2m_mean,precipitation_sum,uv_index_max
-  &hourly=relativehumidity_2m
-  &start_date={YYYY-MM-DD}&end_date={YYYY-MM-DD}
-```
+| **ERA5 via CDS API** | Gold-standard reanalysis, global 0.25° resolution, all variables | Free but requires ECMWF account | Best for historical runs; slower to access|
 
 ---
 
 ## 2. Infrastructure Quality Factor
 
-### Scientific Basis
-
 The current model accounts for disease spread via transportation hubs (airports, transit) and hospitals. However, high-contact community settings drive a significant share of transmission:
 
-| Infrastructure Type | Transmission Role |
-|---|---|
-| Schools (K–12, universities) | High-density, sustained child/young-adult contact |
-| Libraries | Indoor, often enclosed, cross-demographic mixing |
-| Public transit (buses, subways) | High-volume, enclosed, short-duration contacts |
-| Retail and commercial | Moderate-volume, indoor, recurring visits |
-| Community / recreation centers | Sustained indoor gathering |
-| Religious facilities | Weekly high-density indoor events |
-| Restaurants / food service | Indoor dining, reduced ventilation |
+
+Schools (K–12, universities): High-density, sustained child/young-adult contact 
+Libraries: Indoor, often enclosed, cross-demographic mixing 
+Public transit (buses, subways): High-volume, enclosed, short-duration contacts 
+Retail and commercial: Moderate-volume, indoor, recurring visits 
+Community / recreation centers: Sustained indoor gathering 
+Religious facilities: Weekly high-density indoor events 
+Restaurants / food service: Indoor dining, reduced ventilation 
 
 The goal is to produce a per-grid-cell `infrastructure_contact_multiplier` — a scalar > 1.0 in infrastructure-dense areas that inflates the effective contact rate:
 
-```
+
 beta_effective = beta0 * infrastructure_factor(lat, lon)
-```
+
 
 ### Infrastructure Score Formula
 
@@ -272,4 +249,5 @@ For GTFS transit: bulk feed download from https://transit.land/ or individual ag
 
 ## Notes:
 We should incorporate how these factors would be ranked in the priority/tiering system, as of now he has a few factors with effect that do not have equal worth on the calculation for the beta; it's a weighted average based on ranking in a priority tier list that how heavily the beta is changed. 
+
 Also DEFINITELY need his help because ForTran is doing the hard math with all the numbers made by the python backend. So he would have to do some fortran nonsense to make sure that our numbers aren't just going into nothing.
