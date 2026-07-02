@@ -1,14 +1,4 @@
 # Implementation Plan: Meteorological & Infrastructure Quality Factors
-
-## Overview
-
-This document outlines the plan to incorporate two new environmental factors into the MAPS (Multi-Agent Pathogen Simulation) model:
-
-1. **Meteorological Factor** — weather conditions (temperature, humidity, UV) that affect viral survival and transmission rates
-2. **Infrastructure Quality Factor** — expanded infrastructure coverage (schools, libraries, public transit, retail, etc.) that affects per-cell contact rates
-
-Both factors translate into spatially-resolved grid multipliers that modulate the base transmission rate (`beta`) before it reaches the Fortran simulation core.
-
 ---
 
 ## 1. Meteorological Factor
