@@ -77,8 +77,9 @@ _FACTOR_MIN: float = 0.50
 _FACTOR_MAX: float = 1.50
 
 # US continental bounding box used when the MAPS grid is larger than the US.
-_US_LAT_MIN, _US_LAT_MAX = 24.0, 50.0
+_US_LAT_MIN, _US_LAT_MAX = 24.0, 50.0 
 _US_LON_MIN, _US_LON_MAX = -126.0, -65.0
+
 
 # Switch from archive to forecast endpoint when init_date is this many days
 # in the past or fewer (Open-Meteo archive has a ~5-day processing lag).
