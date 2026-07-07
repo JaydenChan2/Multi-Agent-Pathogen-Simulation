@@ -107,6 +107,11 @@ _MULTIPLIER_MAX: float = 1.50
 # Default z-score scale factor: 1 SD above mean → multiplier of 1.15.
 _DEFAULT_ALPHA: float = 0.15
 
+# WEIGHT — how strongly the infrastructure factor modulates beta.
+# Set lower than the meteo weight because infrastructure-based contact patterns
+# are less directly validated against observed transmission data.
+INFRA_BETA_WEIGHT: float = 0.40  # WEIGHT
+
 
 # ---------------------------------------------------------------------------
 # Utility: namelist parser (mirrors parse_simple_namelist in the IC builder)
@@ -414,7 +419,7 @@ def compute_infra_multiplier(
         mask = np.ones((ny, nx), dtype=bool)
 
     valid_vals = per_capita[mask]
-    if valid_vals.size == 0 or float(valid_vals.std()) == 0.0:
+    if valid_vals.size == 0 or float(valid_vals.std()) < 1e-12:
         return np.ones((ny, nx), dtype=np.float32)
 
     mu = float(valid_vals.mean())
@@ -452,6 +457,43 @@ def make_dry_run_multiplier_grid(
     noise = rng.normal(loc=0.0, scale=0.05, size=(ny, nx))
     grid = lon_effect[np.newaxis, :] + noise
     return np.clip(grid, _MULTIPLIER_MIN, _MULTIPLIER_MAX).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Beta contribution — weighted application of the infra factor to beta
+# ---------------------------------------------------------------------------
+
+def apply_infra_to_beta(
+    base_beta: float,
+    infra_factor: float,
+    weight: float = INFRA_BETA_WEIGHT,  # WEIGHT
+) -> float:
+    """
+    Apply the infrastructure multiplier to a base beta value with an explicit weight.
+
+    Formula
+    -------
+    new_beta = base_beta × (1.0 + weight × (infra_factor − 1.0))
+
+    At weight=0.40 (default), a 10% infrastructure-driven increase in the
+    factor raises beta by 4% rather than the full 10%. This conservative weight
+    reflects that infrastructure density is a proxy for contact rate, not a
+    direct measurement.
+
+    Parameters
+    ----------
+    base_beta    : the beta value before environmental adjustment
+    infra_factor : spatial mean of the infra_multiplier grid (1.0 = neutral)
+    weight       : how strongly infrastructure density modulates beta
+                   (default INFRA_BETA_WEIGHT)
+
+    Returns
+    -------
+    Adjusted beta value. Guaranteed >= 0.
+    """
+    # WEIGHT — attenuates the infra factor's deviation from neutral before applying
+    scaled_factor = 1.0 + weight * (infra_factor - 1.0)  # WEIGHT
+    return max(0.0, base_beta * scaled_factor)
 
 
 # ---------------------------------------------------------------------------

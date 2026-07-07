@@ -4,6 +4,44 @@ import sys
 import csv
 import os
 
+try:
+    import numpy as _np
+    from netCDF4 import Dataset as _Dataset
+    _GRID_LIBS_AVAILABLE = True
+except ImportError:
+    _GRID_LIBS_AVAILABLE = False
+
+try:
+    from meteorological_factor import apply_meteo_to_beta
+    from infrastructure_grid import apply_infra_to_beta
+    _ENV_FUNCS_AVAILABLE = True
+except ImportError:
+    _ENV_FUNCS_AVAILABLE = False
+
+
+def load_spatial_mean(nc_path):
+    """
+    Return the unweighted spatial mean of the single data variable in a MAPS grid NetCDF.
+
+    Fills masked values and NaN with 1.0 (neutral) before averaging so that
+    ocean/unpopulated cells do not pull the mean away from 1.0.
+    Returns 1.0 if the file cannot be read.
+    """
+    try:
+        with _Dataset(nc_path, "r") as ds:
+            candidates = [n for n in ds.variables if n not in ("lat", "lon")]
+            if len(candidates) != 1:
+                print(f"WARNING: {nc_path} has {len(candidates)} data variables; expected 1. Skipping.")
+                return 1.0
+            raw = ds.variables[candidates[0]][:]
+            data = _np.ma.filled(raw, 1.0) if _np.ma.isMaskedArray(raw) else _np.array(raw, dtype=float)
+            data = _np.where(_np.isfinite(data), data, 1.0)
+            return float(data.mean())
+    except Exception as exc:
+        print(f"WARNING: could not read {nc_path}: {exc}")
+        return 1.0
+
+
 # ============================================================
 # INPUT ARGUMENTS
 # ============================================================
@@ -63,6 +101,36 @@ year  = int(year_str)
 
 date_tag_us = f"{month:02d}_{day:02d}_{year}"
 date_tag_hy = f"{month:02d}-{day:02d}-{year}"
+date_iso    = f"{year_str}-{month_str}-{day_str}"   # YYYY-MM-DD for grid filenames
+
+# ============================================================
+# LOAD ENVIRONMENTAL FACTOR GRIDS
+# ============================================================
+# Both multipliers are read once here and applied uniformly to
+# every variant's beta0_base below.  Using the spatial mean
+# keeps beta0_by_variant a scalar (no Fortran changes needed)
+# while still making beta0 weather- and infrastructure-aware.
+
+_meteo_grid_path = f"MAPS_FORECASTS/initial_conditions/maps_meteo_{date_iso}.nc"
+_infra_grid_path = "MAPS_FORECASTS/static_grids/maps_infrastructure.nc"
+
+_meteo_mean = 1.0
+_infra_mean = 1.0
+
+if _GRID_LIBS_AVAILABLE:
+    if os.path.exists(_meteo_grid_path):
+        _meteo_mean = load_spatial_mean(_meteo_grid_path)
+        print(f"[env] meteo_beta_factor  mean = {_meteo_mean:.4f}  ({_meteo_grid_path})")
+    else:
+        print(f"[env] meteo grid not found — neutral 1.0  ({_meteo_grid_path})")
+
+    if os.path.exists(_infra_grid_path):
+        _infra_mean = load_spatial_mean(_infra_grid_path)
+        print(f"[env] infra_multiplier   mean = {_infra_mean:.4f}  ({_infra_grid_path})")
+    else:
+        print(f"[env] infra grid not found — neutral 1.0  ({_infra_grid_path})")
+else:
+    print("[env] netCDF4/numpy not available — environmental factor grids skipped")
 
 forecast_dir = f"MAPS_FORECASTS/forecasts/forecast_{date_tag_hy}"
 member_dir   = f"{forecast_dir}/{member_name}"
@@ -217,6 +285,7 @@ def find_phylogeny(variant, family_tree):
         test = ".".join(test.split(".")[:-1])
 
     return None
+
 
 family_tree_file = (
     "MAPS_FORECASTS/variant_database/variant_family_tree.csv"
@@ -377,8 +446,17 @@ with open(variant_file, "r", newline="") as f:
         # First-guess MAPS formulas
         # ----------------------------------------------------
 
-        beta0_base = 0.23 + 0.20 * beta_guess
+        _beta0_raw = 0.23 + 0.20 * beta_guess
+        if _ENV_FUNCS_AVAILABLE:
+            beta0_base = apply_meteo_to_beta(_beta0_raw, _meteo_mean)
+            # *** WEIGHTING *** — meteo factor applied with METEO_BETA_WEIGHT (default 0.60)
+            beta0_base = apply_infra_to_beta(beta0_base, _infra_mean)
+            # *** WEIGHTING *** — infra factor applied with INFRA_BETA_WEIGHT (default 0.40), on top of meteo-adjusted beta
+        else:
+            beta0_base = _beta0_raw * _meteo_mean * _infra_mean
+            # *** WEIGHTING *** — fallback: full multiplication used when factor scripts are unavailable
         ie0_base   = 1.00 - 0.25 * beta_guess
+        # *** WEIGHTING *** — base immune-escape rate: inverse scaling from growth rate
 
         # ----------------------------------------------------
         # Choose multipliers
@@ -399,11 +477,13 @@ with open(variant_file, "r", newline="") as f:
                 variant_overrides[override_key]
                 ["beta_multiplier"]
             )
+            # *** WEIGHTING *** — Tier 1 OVERRIDE: member-specific beta multiplier, highest priority
 
             ie_mult = (
                 variant_overrides[override_key]
                 ["IE_multiplier"]
             )
+            # *** WEIGHTING *** — Tier 1 OVERRIDE: member-specific immune-escape multiplier
 
             source = "OVERRIDE"
 
@@ -413,18 +493,22 @@ with open(variant_file, "r", newline="") as f:
                 variant_db[label]
                 ["beta_multiplier"]
             )
+            # *** WEIGHTING *** — Tier 2 DATABASE: variant-level beta multiplier from parameter database
 
             ie_mult = (
                 variant_db[label]
                 ["IE_multiplier"]
             )
+            # *** WEIGHTING *** — Tier 2 DATABASE: variant-level immune-escape multiplier
 
             source = "DATABASE"
 
         else:
 
             beta_mult = beta_scale
+            # *** WEIGHTING *** — Tier 3 GLOBAL: ensemble-wide beta scale passed as CLI argument
             ie_mult   = ie_scale
+            # *** WEIGHTING *** — Tier 3 GLOBAL: ensemble-wide immune-escape scale passed as CLI argument
             source = "GLOBAL"
         #
         # Growth-period beta guardrail
@@ -432,6 +516,7 @@ with open(variant_file, "r", newline="") as f:
 
         if parameter_mode in ["DATABASE", "OVERRIDE"]:
             beta_mult = min(beta_mult, 1.5)
+            # *** WEIGHTING *** — guardrail cap: prevents database/override multipliers from inflating beta above 1.5×
 
         #
         # Age-aware adjustment
@@ -446,14 +531,17 @@ with open(variant_file, "r", newline="") as f:
             #
 
             beta_mult = min(beta_mult, 1.50)
+            # *** WEIGHTING *** — age cap: young variants (<30 days) capped at 1.50× to prevent runaway beta during emergence
 
             #
             # Push toward immune escape
             #
 
             ie_cap = 0.40 + 0.60 * age_factor
+            # *** WEIGHTING *** — age-derived immune-escape ceiling: linearly relaxes from 0.40 → 1.0 as variant matures
 
             ie_mult = min(ie_mult, ie_cap)
+            # *** WEIGHTING *** — enforces the age-derived ceiling on immune-escape multiplier
 
             age_flag = "YOUNG"
 
@@ -473,7 +561,9 @@ with open(variant_file, "r", newline="") as f:
         #
 
         beta0 = beta0_base * beta_mult
+        # *** WEIGHTING *** — final beta0: environmental base × tier-selected multiplier (all guardrails applied)
         ie0   = ie0_base   * ie_mult
+        # *** WEIGHTING *** — final IE0: base immune-escape × tier-selected multiplier (age ceiling applied)
 
         variant_labels.append(label)
         beta0_values.append(beta0)

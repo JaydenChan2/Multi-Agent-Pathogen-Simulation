@@ -76,6 +76,12 @@ _T_SLOPE: float = 0.010       # per °C
 _FACTOR_MIN: float = 0.50
 _FACTOR_MAX: float = 1.50
 
+# WEIGHT — how strongly the meteorological factor modulates beta.
+# 1.0 = full effect; 0.0 = disabled; values between attenuate the influence.
+# Weather is the better-established predictor (Shaman & Kohn 2009), so this
+# weight is set higher than the infrastructure weight.
+METEO_BETA_WEIGHT: float = 0.60  # WEIGHT
+
 # US continental bounding box used when the MAPS grid is larger than the US.
 _US_LAT_MIN, _US_LAT_MAX = 24.0, 50.0 
 _US_LON_MIN, _US_LON_MAX = -126.0, -65.0
@@ -263,7 +269,7 @@ def fetch_meteo_point(
     params = {
         "latitude": round(lat, 4),
         "longitude": round(lon, 4),
-        "daily": "temperature_2m_mean,relativehumidity_2m_mean,uv_index_max",
+        "daily": "temperature_2m_mean,relative_humidity_2m_mean,uv_index_max",
         "timezone": "UTC",
         "start_date": date_str,
         "end_date": date_str,
@@ -273,14 +279,19 @@ def fetch_meteo_point(
         resp.raise_for_status()
         daily = resp.json().get("daily", {})
         T_list = daily.get("temperature_2m_mean", [None])
-        RH_list = daily.get("relativehumidity_2m_mean", [None])
+        RH_list = daily.get("relative_humidity_2m_mean", [None])
         UV_list = daily.get("uv_index_max", [None])
         T = T_list[0] if T_list else None
         RH = RH_list[0] if RH_list else None
-        UV = UV_list[0] if UV_list else _UV_REF
+        UV_raw = UV_list[0] if UV_list else None
         if T is None or RH is None:
             return None
-        return {"T": float(T), "RH": float(RH), "UV": float(UV) if UV is not None else _UV_REF}
+        if UV_raw is None:
+            # Seasonal UV proxy: latitude and day-of-year drive insolation
+            doy = init_date.timetuple().tm_yday
+            solar_angle = np.cos(np.radians(lat - 23.5 * np.cos(2 * np.pi * (doy - 172) / 365)))
+            UV_raw = max(0.5, float(8.0 * solar_angle))
+        return {"T": float(T), "RH": float(RH), "UV": float(UV_raw)}
     except Exception:
         return None
 
@@ -401,6 +412,42 @@ def make_dry_run_factor_grid(
     noise = rng.normal(loc=0.0, scale=0.05, size=(ny, nx))
     grid = lat_effect[:, np.newaxis] + noise
     return np.clip(grid, 0.75, 1.25).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Beta contribution — weighted application of the meteo factor to beta
+# ---------------------------------------------------------------------------
+
+def apply_meteo_to_beta(
+    base_beta: float,
+    meteo_factor: float,
+    weight: float = METEO_BETA_WEIGHT,  # WEIGHT
+) -> float:
+    """
+    Apply the meteorological factor to a base beta value with an explicit weight.
+
+    Formula
+    -------
+    new_beta = base_beta × (1.0 + weight × (meteo_factor − 1.0))
+
+    This is a linear blend between no effect (weight=0 → new_beta = base_beta)
+    and full effect (weight=1 → new_beta = base_beta × meteo_factor). At the
+    default weight of 0.60, a 10% weather-driven increase in the factor raises
+    beta by 6% rather than the full 10%.
+
+    Parameters
+    ----------
+    base_beta    : the beta value before environmental adjustment
+    meteo_factor : spatial mean of the meteo_beta_factor grid (1.0 = neutral)
+    weight       : how strongly weather modulates beta (default METEO_BETA_WEIGHT)
+
+    Returns
+    -------
+    Adjusted beta value. Guaranteed >= 0.
+    """
+    # WEIGHT — attenuates the meteo factor's deviation from neutral before applying
+    scaled_factor = 1.0 + weight * (meteo_factor - 1.0)  # WEIGHT
+    return max(0.0, base_beta * scaled_factor)
 
 
 # ---------------------------------------------------------------------------
