@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""
+edit_namelist.py — Per-member namelist editor for MAPS ensemble runs.
+
+Weighting summary — every point where a factor's effect is scaled
+-----------------------------------------------------------------
+WEIGHT 1 — Meteorological factor (apply_meteo_to_beta):
+    The spatial mean of the meteo_beta_factor grid is applied to beta0_raw
+    with METEO_BETA_WEIGHT (default 0.60) inside apply_meteo_to_beta().
+    Formula: beta_after_meteo = beta0_raw × (1.0 + 0.60 × (meteo_mean − 1.0))
+    Source grid: MAPS_FORECASTS/initial_conditions/maps_meteo_<date>.nc
+
+WEIGHT 2 — Infrastructure factor (apply_infra_to_beta):
+    The spatial mean of the infra_multiplier grid is then applied on top of
+    the meteo-adjusted beta with INFRA_BETA_WEIGHT (default 0.40) inside
+    apply_infra_to_beta().
+    Formula: beta0_base = beta_after_meteo × (1.0 + 0.40 × (infra_mean − 1.0))
+    Source grid: MAPS_FORECASTS/static_grids/maps_infrastructure.nc
+
+WEIGHT 3 — Tier multipliers (OVERRIDE > DATABASE > GLOBAL priority):
+    beta0_final = beta0_base × beta_mult  where beta_mult comes from:
+      - Tier 1 OVERRIDE: member-specific override dict (highest priority)
+      - Tier 2 DATABASE: variant-level parameter from the CSV database
+      - Tier 3 GLOBAL:   ensemble-wide scale passed as a CLI argument
+    A guardrail cap (1.5×) prevents any single multiplier from inflating
+    beta0_base by more than 50%.
+
+WEIGHT 4 — Immune-escape multipliers (same three-tier system):
+    ie0_final = ie0_base × ie_mult  subject to an age-derived ceiling that
+    linearly relaxes from 0.40 → 1.0 as the variant matures past 30 days.
+
+WEIGHT 5 — Age adjustment guardrail:
+    Young variants (<30 days) are capped at 1.50× to prevent runaway beta
+    during emergence before sufficient surveillance data exists.
+"""
 
 import sys
 import csv
@@ -21,11 +55,18 @@ except ImportError:
 
 def load_spatial_mean(nc_path):
     """
-    Return the unweighted spatial mean of the single data variable in a MAPS grid NetCDF.
+    Return the spatial mean of the single data variable in a MAPS grid NetCDF.
 
-    Fills masked values and NaN with 1.0 (neutral) before averaging so that
-    ocean/unpopulated cells do not pull the mean away from 1.0.
-    Returns 1.0 if the file cannot be read.
+    This scalar mean feeds directly into the WEIGHT 1 and WEIGHT 2 steps
+    described in the module docstring. Because edit_namelist.py writes a scalar
+    beta0 per variant (not a spatial field), the per-cell grid is collapsed to
+    one representative value here before apply_meteo_to_beta() or
+    apply_infra_to_beta() scales beta0.
+
+    Masked values and NaN are filled with 1.0 (neutral multiplier) before
+    averaging so that ocean and unpopulated cells do not artificially pull the
+    national mean away from 1.0. Returns 1.0 (no effect) if the file is absent
+    or cannot be read, keeping the pipeline safe when grid files are missing.
     """
     try:
         with _Dataset(nc_path, "r") as ds:

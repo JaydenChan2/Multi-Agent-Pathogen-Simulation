@@ -30,6 +30,21 @@ What it does
    NaN cells are pre-filled with 1.0 (neutral) so the reader's NaN→0 fill
    does not accidentally zero out beta.
 
+Weighting summary — every point where a factor's effect is scaled
+-----------------------------------------------------------------
+WEIGHT 1 — Sub-factor blend weights inside compute_meteo_factor():
+    w_ah (default 0.50)  — share of beta influence from absolute humidity
+    w_uv (default 0.30)  — share of beta influence from UV index
+    w_t  (default 0.20)  — share of beta influence from temperature
+    These three are normalised to sum to 1.0 internally, so their absolute
+    values do not matter — only their ratios do.
+
+WEIGHT 2 — Whole-factor attenuation inside apply_meteo_to_beta():
+    METEO_BETA_WEIGHT (default 0.60) controls how much of the grid's
+    deviation from neutral (1.0) is actually applied to beta.
+    Formula: new_beta = base_beta × (1.0 + 0.60 × (meteo_factor − 1.0))
+    At 0.60 a 10% weather signal raises beta by 6%, not the full 10%.
+
 Pass --dry-run for format-only testing (no network calls, no scipy required).
 """
 from __future__ import annotations
@@ -218,7 +233,17 @@ def compute_meteo_factor(
     AH    : absolute humidity in g m⁻³
     UV    : daily-maximum UV index
     T     : daily-mean temperature in °C
-    w_ah, w_uv, w_t : relative weights (need not sum to 1; normalised internally)
+    w_ah  : WEIGHT — relative influence of absolute humidity on the composite
+            factor (default 0.50). Higher values make dry/humid conditions
+            drive more of the beta variation.
+    w_uv  : WEIGHT — relative influence of UV index on the composite factor
+            (default 0.30). Higher values make strong sunlight suppress beta
+            more aggressively.
+    w_t   : WEIGHT — relative influence of temperature on the composite factor
+            (default 0.20). Higher values make cold weather elevate beta more.
+
+    All three weights are normalised by their sum before use, so only their
+    ratios matter. Setting any weight to 0.0 disables that sub-factor entirely.
 
     Returns a float in [_FACTOR_MIN, _FACTOR_MAX].
     """
@@ -439,7 +464,9 @@ def apply_meteo_to_beta(
     ----------
     base_beta    : the beta value before environmental adjustment
     meteo_factor : spatial mean of the meteo_beta_factor grid (1.0 = neutral)
-    weight       : how strongly weather modulates beta (default METEO_BETA_WEIGHT)
+    weight       : WEIGHT — fraction of the meteorological signal applied to
+                   beta. Default is METEO_BETA_WEIGHT (0.60). Set to 1.0 for
+                   full effect; 0.0 to disable weather influence entirely.
 
     Returns
     -------

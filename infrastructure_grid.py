@@ -37,6 +37,26 @@ What it does
                     infra_multiplier [f4,(lat,lon), zlib]
    NaN cells are pre-filled with 1.0 before writing.
 
+Weighting summary — every point where a factor's effect is scaled
+-----------------------------------------------------------------
+WEIGHT 1 — POI-type weights inside INFRA_WEIGHTS dict:
+    Each OSM amenity type carries a relative transmission weight (e.g. school
+    = 1.50, restaurant = 0.60). These are accumulated per grid cell during
+    rasterisation and reflect how strongly each venue type drives contact-rate
+    transmission compared to a baseline community setting (weight = 1.0).
+
+WEIGHT 2 — Spread magnitude inside compute_infra_multiplier():
+    alpha (default 0.15) controls how far the z-score scaling stretches the
+    multiplier away from 1.0. A cell 1 SD above the national mean gets
+    multiplier = 1.0 + alpha. Larger alpha amplifies urban/rural contrast.
+
+WEIGHT 3 — Whole-factor attenuation inside apply_infra_to_beta():
+    INFRA_BETA_WEIGHT (default 0.40) controls how much of the grid's
+    deviation from neutral (1.0) is applied to beta.
+    Formula: new_beta = base_beta × (1.0 + 0.40 × (infra_factor − 1.0))
+    Set lower than METEO_BETA_WEIGHT because infrastructure density is a
+    proxy for contact rate rather than a direct measurement.
+
 Pass --dry-run for format-only testing (no network calls).
 """
 from __future__ import annotations
@@ -407,6 +427,17 @@ def compute_infra_multiplier(
 
     If all valid cells have identical density (zero variance), returns a flat
     1.0 grid rather than dividing by zero.
+
+    Parameters
+    ----------
+    raw_density : accumulated weighted POI count per cell from rasterize_pois()
+    pop_grid    : population per cell used to convert counts to per-capita
+                  density; pass None to skip normalisation
+    alpha       : WEIGHT — controls the spread of the multiplier around 1.0.
+                  A cell 1 standard deviation above the national mean receives
+                  multiplier = 1.0 + alpha. Default is _DEFAULT_ALPHA (0.15),
+                  giving a ±15% range for cells 1 SD above/below average.
+                  Increase to amplify urban/rural contrast; decrease to dampen.
     """
     ny, nx = raw_density.shape
 
@@ -484,8 +515,12 @@ def apply_infra_to_beta(
     ----------
     base_beta    : the beta value before environmental adjustment
     infra_factor : spatial mean of the infra_multiplier grid (1.0 = neutral)
-    weight       : how strongly infrastructure density modulates beta
-                   (default INFRA_BETA_WEIGHT)
+    weight       : WEIGHT — fraction of the infrastructure signal applied to
+                   beta. Default is INFRA_BETA_WEIGHT (0.40). Set to 1.0 for
+                   full effect; 0.0 to disable infrastructure influence entirely.
+                   Intentionally lower than METEO_BETA_WEIGHT (0.60) because
+                   infrastructure density is a structural proxy, not a measured
+                   transmission parameter.
 
     Returns
     -------
