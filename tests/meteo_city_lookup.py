@@ -224,15 +224,25 @@ def report_month(lat: float, lon: float, month_str: str, base_beta: float, sessi
 
     factors = np.array([r["factor"] for r in records])
     mean_factor = float(factors.mean())
+    median_factor = float(np.median(factors))
+    n_above = int(np.sum(factors > 1.0))
+    n_below = int(np.sum(factors < 1.0))
+    n_neutral = len(records) - n_above - n_below
     print(f"\n{len(records)} days fetched.")
     print("\nDay-to-day spread within the month:")
-    print(f"  min  : {float(factors.min()):.4f}  ({records[int(factors.argmin())]['date']})")
-    print(f"  max  : {float(factors.max()):.4f}  ({records[int(factors.argmax())]['date']})")
-    print(f"  std  : {float(factors.std()):.4f}")
+    print(f"  min    : {float(factors.min()):.4f}  ({records[int(factors.argmin())]['date']})")
+    print(f"  max    : {float(factors.max()):.4f}  ({records[int(factors.argmax())]['date']})")
+    print(f"  std    : {float(factors.std()):.4f}")
+    print(f"  median : {median_factor:.4f}  (robust to outlier days, unlike the mean)")
+    print(f"  days favouring transmission (factor > 1.0)   : {n_above}/{len(records)}")
+    print(f"  days suppressing transmission (factor < 1.0) : {n_below}/{len(records)}")
+    if n_neutral:
+        print(f"  days exactly neutral (factor == 1.0)         : {n_neutral}/{len(records)}")
 
     print(f"\n{'=' * 60}")
     print(f"MONTHLY MULTIPLIER for {month_str} "
           f"(average of {len(records)} daily meteo_beta_factor values): {mean_factor:.4f}")
+    print(f"  (median across the same {len(records)} days: {median_factor:.4f})")
     print(f"{'=' * 60}")
 
     new_beta = apply_meteo_to_beta(base_beta, mean_factor)
