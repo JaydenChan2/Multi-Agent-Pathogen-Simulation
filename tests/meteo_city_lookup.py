@@ -239,6 +239,20 @@ def report_month(lat: float, lon: float, month_str: str, base_beta: float, sessi
     if n_neutral:
         print(f"  days exactly neutral (factor == 1.0)         : {n_neutral}/{len(records)}")
 
+    std_factor = float(factors.std())
+    if std_factor > 0:
+        z_scores = (factors - mean_factor) / std_factor
+        anomalous = [(records[i]["date"], float(factors[i]), float(z_scores[i]))
+                     for i in np.where(np.abs(z_scores) > 2.0)[0]]
+        if anomalous:
+            print(f"\nAnomalous days (|z-score| > 2.0 vs the month's mean/std — reported, not excluded "
+                  f"from the average, since these are real weather events, not data errors):")
+            for date_str_a, factor_a, z in anomalous:
+                direction = "unusually high" if z > 0 else "unusually low"
+                print(f"  {date_str_a} : factor={factor_a:.4f}  (z={z:+.2f}, {direction})")
+        else:
+            print("\nNo statistically anomalous days this month (all within 2 std of the mean).")
+
     print(f"\n{'=' * 60}")
     print(f"MONTHLY MULTIPLIER for {month_str} "
           f"(average of {len(records)} daily meteo_beta_factor values): {mean_factor:.4f}")
