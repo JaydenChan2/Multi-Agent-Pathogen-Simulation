@@ -225,14 +225,18 @@ def report_month(lat: float, lon: float, month_str: str, base_beta: float, sessi
     factors = np.array([r["factor"] for r in records])
     mean_factor = float(factors.mean())
     print(f"\n{len(records)} days fetched.")
-    print("\nmeteo_beta_factor summary for the month:")
-    print(f"  mean : {mean_factor:.4f}")
+    print("\nDay-to-day spread within the month:")
     print(f"  min  : {float(factors.min()):.4f}  ({records[int(factors.argmin())]['date']})")
     print(f"  max  : {float(factors.max()):.4f}  ({records[int(factors.argmax())]['date']})")
     print(f"  std  : {float(factors.std()):.4f}")
 
+    print(f"\n{'=' * 60}")
+    print(f"MONTHLY MULTIPLIER for {month_str} "
+          f"(average of {len(records)} daily meteo_beta_factor values): {mean_factor:.4f}")
+    print(f"{'=' * 60}")
+
     new_beta = apply_meteo_to_beta(base_beta, mean_factor)
-    print("\nExample beta adjustment using the monthly mean factor (METEO_BETA_WEIGHT=0.60):")
+    print("\nExample beta adjustment using this monthly multiplier (METEO_BETA_WEIGHT=0.60):")
     print(f"  base_beta  = {base_beta:.4f}")
     print(f"  new_beta   = {new_beta:.4f}  "
           f"({'+' if new_beta >= base_beta else ''}{(new_beta/base_beta - 1)*100:.2f}% vs base)")
