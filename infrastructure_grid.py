@@ -207,20 +207,24 @@ def read_population_grid(
 # ---------------------------------------------------------------------------
 
 def _build_overpass_query(
-    south: float, west: float, north: float, east: float
+    south: float, west: float, north: float, east: float,
+    exclude_amenities: Optional[set] = None,
 ) -> str:
     """
     Build an Overpass QL query that returns all infrastructure POI nodes within
     a geographic bounding box.
 
     The query uses [out:json] for easy parsing and a 60-second server timeout.
-    It unions all amenity types in INFRA_WEIGHTS and all key=value pairs in
-    EXTRA_OSM_TAGS so a single tile request captures every infrastructure type.
+    It unions all amenity types in INFRA_WEIGHTS (except any in
+    exclude_amenities) and all key=value pairs in EXTRA_OSM_TAGS so a single
+    tile request captures every infrastructure type.
     """
+    exclude_amenities = exclude_amenities or set()
     bbox = f"{south:.4f},{west:.4f},{north:.4f},{east:.4f}"
     amenity_lines = "\n  ".join(
         f'node["amenity"="{tag}"]({bbox});'
         for tag in INFRA_WEIGHTS
+        if tag not in exclude_amenities
     )
     extra_lines = "\n  ".join(
         f'node["{k}"="{v}"]({bbox});'
@@ -244,6 +248,7 @@ def query_osm_tile(
     session: "_requests.Session",  # type: ignore[name-defined]
     max_retries: int = 3,
     retry_delay: float = 10.0,
+    exclude_amenities: Optional[set] = None,
 ) -> List[Tuple[float, float, float]]:
     """
     Query the Overpass API for infrastructure POIs in one geographic tile.
@@ -252,7 +257,7 @@ def query_osm_tile(
     On repeated failure the tile is skipped and an empty list is returned so
     the overall grid build is not aborted by a single flaky request.
     """
-    query = _build_overpass_query(south, west, north, east)
+    query = _build_overpass_query(south, west, north, east, exclude_amenities)
     pois: List[Tuple[float, float, float]] = []
 
     for attempt in range(max_retries):
@@ -301,6 +306,7 @@ def fetch_all_osm_pois(
     lon_max: float,
     tile_size: float = _TILE_SIZE_DEG,
     inter_tile_delay: float = 2.0,
+    exclude_amenities: Optional[set] = None,
 ) -> List[Tuple[float, float, float]]:
     """
     Tile the US bounding box and query OpenStreetMap for all tiles.
@@ -327,7 +333,7 @@ def fetch_all_osm_pois(
                 f"  tile {tile_num}/{total_tiles}: "
                 f"[{s:.1f},{w:.1f}] → [{n:.1f},{e:.1f}]"
             )
-            pois = query_osm_tile(s, w, n, e, session)
+            pois = query_osm_tile(s, w, n, e, session, exclude_amenities=exclude_amenities)
             all_pois.extend(pois)
             print(f"    → {len(pois)} POIs (running total: {len(all_pois)})")
             time.sleep(inter_tile_delay)
@@ -355,6 +361,10 @@ def load_nces_schools(csv_path: Path) -> List[Tuple[float, float, float]]:
 
     Returning enrollment-weighted entries allows this data to replace OSM school
     nodes (which carry no capacity information) in high-accuracy use cases.
+    main() excludes the "school" amenity from the Overpass query whenever
+    --nces-csv is supplied, so these enrollment-weighted entries substitute for
+    OSM school nodes rather than adding to them (avoiding double-counting the
+    same physical schools).
     """
     pois: List[Tuple[float, float, float]] = []
     with csv_path.open("r", newline="", encoding="utf-8-sig") as f:
@@ -421,7 +431,14 @@ def compute_infra_multiplier(
     ---------
     1. Divide by population to get per-capita density (if pop_grid is supplied).
        Cells with zero population are excluded from statistics and set to 1.0.
-    2. Z-score standardise across all populated cells.
+    2. Z-score standardise across all populated cells, weighting the mean and
+       standard deviation by each cell's population. Without this weighting, a
+       handful of near-zero-population cells (e.g. a single POI in a cell with
+       1-2 residents) produce enormous per-capita ratios that dominate an
+       unweighted mean/std and compress the z-scores of every real urban/rural
+       cell toward 0. Population weighting makes the baseline represent the
+       density experienced by the average resident, not a statistical artifact
+       of sparsely-populated cells.
     3. Map: multiplier = 1.0 + alpha * z_score.
     4. Clamp to [_MULTIPLIER_MIN, _MULTIPLIER_MAX].
 
@@ -450,11 +467,19 @@ def compute_infra_multiplier(
         mask = np.ones((ny, nx), dtype=bool)
 
     valid_vals = per_capita[mask]
-    if valid_vals.size == 0 or float(valid_vals.std()) < 1e-12:
+    if valid_vals.size == 0:
         return np.ones((ny, nx), dtype=np.float32)
 
-    mu = float(valid_vals.mean())
-    sigma = float(valid_vals.std())
+    weights = pop_grid[mask].astype(np.float64) if pop_grid is not None else np.ones_like(valid_vals)
+    weight_sum = float(weights.sum())
+    if weight_sum <= 0.0:
+        return np.ones((ny, nx), dtype=np.float32)
+
+    mu = float(np.sum(weights * valid_vals) / weight_sum)
+    sigma = float(np.sqrt(np.sum(weights * (valid_vals - mu) ** 2) / weight_sum))
+    if sigma < 1e-12:
+        return np.ones((ny, nx), dtype=np.float32)
+
     z = (per_capita - mu) / sigma
 
     multiplier = 1.0 + alpha * z
@@ -656,6 +681,11 @@ def main() -> None:
             print("ERROR: 'requests' is required. Install: pip install requests", file=sys.stderr)
             sys.exit(1)
 
+        # When NCES enrollment data is supplied, drop OSM "school" nodes from the
+        # query so schools aren't counted twice (once as a flat OSM weight, once
+        # as an enrollment-weighted NCES entry).
+        exclude_amenities = {"school"} if args.nces_csv else None
+
         print("Querying OpenStreetMap Overpass API …")
         all_pois = fetch_all_osm_pois(
             lat_min=max(float(maps_lat.min()), _US_LAT_MIN),
@@ -664,6 +694,7 @@ def main() -> None:
             lon_max=min(float(maps_lon.max()), _US_LON_MAX),
             tile_size=args.tile_size,
             inter_tile_delay=args.tile_delay,
+            exclude_amenities=exclude_amenities,
         )
 
         if args.nces_csv:
